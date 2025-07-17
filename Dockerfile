@@ -16,7 +16,13 @@ RUN ./gradlew bootJar --no-daemon
 FROM eclipse-temurin:21-jre-jammy
 
 WORKDIR /app
+
+ARG UID=10001
+RUN useradd --uid ${UID} --create-home --shell /bin/bash appuser
+
 COPY --from=builder /workspace/build/libs/*.jar app.jar
+
+USER appuser
 
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]

@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.media.Schema
 import io.swagger.v3.oas.annotations.responses.ApiResponse
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
+import jakarta.validation.Valid
 
 @RestController
 class ApiController(private val cartService: CartService) {
@@ -30,7 +31,7 @@ class ApiController(private val cartService: CartService) {
     @PostMapping("/carts/{cartId}/add_recipe")
     fun addRecipeToCart(
         @PathVariable cartId: Long,
-        @RequestBody request: AddRecipeRequest
+        @Valid @RequestBody request: AddRecipeRequest
     ): ResponseEntity<Cart> {
         val updatedCart = cartService.addRecipeToCart(cartId, request.recipeId)
         return ResponseEntity.ok(updatedCart)

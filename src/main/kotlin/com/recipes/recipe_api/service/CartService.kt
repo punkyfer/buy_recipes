@@ -27,23 +27,7 @@ class CartService(
         val recipe = recipeRepository.findById(recipeId)
             .orElseThrow { EntityNotFoundException("Recipe with id $recipeId not found") }
 
-        val existingCartRecipe = cart.recipes.find { it.recipe.id == recipeId }
-        if (existingCartRecipe != null) {
-            existingCartRecipe.quantity++
-        } else {
-            cart.addRecipe(CartRecipe(recipe = recipe, quantity = 1))
-        }
-
-        recipe.products.forEach { product ->
-            val existingItem = cart.items.find { it.product.id == product.id }
-            if (existingItem != null) {
-                existingItem.quantity++
-            } else {
-                cart.addItem(CartItem(product = product, quantity = 1))
-            }
-        }
-
-        cart.recalculateTotal()
+        cart.addRecipe(recipe)
         return cartRepository.save(cart)
     }
 
@@ -51,24 +35,7 @@ class CartService(
     fun removeRecipeFromCart(cartId: Long, recipeId: Long): Cart {
         val cart = findCartById(cartId)
 
-        val cartRecipe = cart.recipes.find { it.recipe.id == recipeId }
-            ?: throw RecipeNotInCartException("Recipe with id $recipeId not in cart.")
-
-        val recipeToRemove = cartRecipe.recipe
-
-        cartRecipe.quantity--
-        if (cartRecipe.quantity <= 0) {
-            cart.recipes.remove(cartRecipe)
-        }
-
-        recipeToRemove.products.forEach { product ->
-            val itemToRemove = cart.items.find { it.product.id == product.id }
-            itemToRemove?.let { it.quantity-- }
-        }
-
-        cart.items.removeIf { it.quantity <= 0 }
-
-        cart.recalculateTotal()
+        cart.removeRecipe(recipeId)
         return cartRepository.save(cart)
     }
 }

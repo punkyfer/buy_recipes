@@ -2,21 +2,21 @@ package com.recipes.recipe_api.service
 
 
 import org.junit.jupiter.api.Assertions.*
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import org.testcontainers.containers.PostgreSQLContainer
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
+import org.springframework.transaction.annotation.Transactional
 import org.springframework.test.context.jdbc.Sql
+import org.springframework.test.context.jdbc.Sql.ExecutionPhase
 
 @SpringBootTest
 @Testcontainers
-@Sql("/schema.sql")
+@Sql("/integration-test-data.sql")
 class CartServiceIntegrationTest {
 
     companion object {
@@ -30,14 +30,12 @@ class CartServiceIntegrationTest {
             registry.add("spring.datasource.username", postgresContainer::getUsername)
             registry.add("spring.datasource.password", postgresContainer::getPassword)
             registry.add("spring.jpa.hibernate.ddl-auto") { "create-drop" }
+            registry.add("spring.flyway.enabled") { "false" }
         }
     }
 
     @Autowired
     private lateinit var cartService: CartService
-
-    @Autowired
-    private lateinit var jdbcTemplate: JdbcTemplate
 
     @Test
     fun `should add a recipe to an empty cart correctly`() {
@@ -45,40 +43,57 @@ class CartServiceIntegrationTest {
 
         assertEquals(3, updatedCart.items.size)
         assertEquals(1, updatedCart.recipes.size)
-        assertEquals(101L, updatedCart.recipes.first().recipe.id)
+
+        assertNotNull(updatedCart.recipes[101L])
+        assertEquals(1, updatedCart.recipes[101L]?.quantity)
+        assertEquals(101L, updatedCart.recipes[101L]?.recipe?.id)
+
         assertEquals(650, updatedCart.totalInCents)
     }
 
     @Test
     fun `should correctly increment quantities when adding recipes with overlapping ingredients`() {
-        cartService.addRecipeToCart(1, 101)
-        val finalCart = cartService.addRecipeToCart(1, 102)
+        cartService.addRecipeToCart(1, 101) // Cake: Flour, Sugar, Eggs
+        val finalCart = cartService.addRecipeToCart(1, 102) // Pancakes: Flour, Eggs
 
-        assertEquals(3, finalCart.items.size)
+        // Assert cart contents
         assertEquals(2, finalCart.recipes.size)
+        assertEquals(3, finalCart.items.size)
 
-        assertEquals(2, finalCart.items.find { it.product.id == 1L }?.quantity)
-        assertEquals(1, finalCart.items.find { it.product.id == 2L }?.quantity)
-        assertEquals(2, finalCart.items.find { it.product.id == 3L }?.quantity)
+        // Assert recipe quantities (both should be 1)
+        assertEquals(1, finalCart.recipes[101L]?.quantity)
+        assertEquals(1, finalCart.recipes[102L]?.quantity)
 
+        // Assert item quantities (Flour and Eggs are shared)
+        assertEquals(2, finalCart.items[1L]?.quantity) // Flour
+        assertEquals(1, finalCart.items[2L]?.quantity) // Sugar
+        assertEquals(2, finalCart.items[3L]?.quantity) // Eggs
+
+        // Assert total price: (2*200 + 1*150 + 2*300) = 400 + 150 + 600 = 1150
         assertEquals(1150, finalCart.totalInCents)
     }
 
     @Test
     fun `should correctly decrement quantities and remove items when a recipe is removed`() {
-        cartService.addRecipeToCart(1, 101)
-        cartService.addRecipeToCart(1, 102)
+        cartService.addRecipeToCart(1, 101) // Cake: Flour, Sugar, Eggs
+        cartService.addRecipeToCart(1, 102) // Pancakes: Flour, Eggs
 
-        val updatedCart = cartService.removeRecipeFromCart(1, 101)
+        val updatedCart = cartService.removeRecipeFromCart(1, 101) // Remove Cake
 
+        // Assert cart contents
         assertEquals(1, updatedCart.recipes.size)
-        assertEquals(102L, updatedCart.recipes.first().recipe.id)
+        assertEquals(2, updatedCart.items.size) // Sugar (product 2) should be gone
 
-        assertNull(updatedCart.items.find { it.product.id == 2L })
+        // Assert remaining recipe is Pancakes
+        assertNull(updatedCart.recipes[101L])
+        assertNotNull(updatedCart.recipes[102L])
 
-        assertEquals(1, updatedCart.items.find { it.product.id == 1L }?.quantity)
-        assertEquals(1, updatedCart.items.find { it.product.id == 3L }?.quantity)
-        assertEquals(2, updatedCart.items.size)
+        // Assert item quantities for Pancakes
+        assertNull(updatedCart.items[2L]) // Sugar is gone
+        assertEquals(1, updatedCart.items[1L]?.quantity) // Flour
+        assertEquals(1, updatedCart.items[3L]?.quantity) // Eggs
+
+        // Assert total price for Pancakes: (1*200 + 1*300) = 500
         assertEquals(500, updatedCart.totalInCents)
     }
 
@@ -88,30 +103,43 @@ class CartServiceIntegrationTest {
         val finalCart = cartService.addRecipeToCart(1, 101)
 
         assertEquals(1, finalCart.recipes.size)
-        assertEquals(2, finalCart.recipes.first().quantity)
+        assertEquals(3, finalCart.items.size)
 
-        assertEquals(2, finalCart.items.find { it.product.id == 1L }?.quantity)
-        assertEquals(2, finalCart.items.find { it.product.id == 2L }?.quantity)
-        assertEquals(2, finalCart.items.find { it.product.id == 3L }?.quantity)
+        // Assert recipe quantity has doubled
+        assertEquals(2, finalCart.recipes[101L]?.quantity)
 
+        // Assert all item quantities have doubled
+        assertEquals(2, finalCart.items[1L]?.quantity) // Flour
+        assertEquals(2, finalCart.items[2L]?.quantity) // Sugar
+        assertEquals(2, finalCart.items[3L]?.quantity) // Eggs
+
+        // Assert total price has doubled: 650 * 2 = 1300
         assertEquals(1300, finalCart.totalInCents)
     }
 
     @Test
     fun `should decrement then remove recipe on subsequent removals`() {
+        // Arrange: Add the same recipe twice
         cartService.addRecipeToCart(1, 101)
         cartService.addRecipeToCart(1, 101)
 
+        // Act 1: Remove the recipe once
         val cartAfterFirstRemoval = cartService.removeRecipeFromCart(1, 101)
 
+        // Assert 1: Quantity should be 1, price should be halved
         assertEquals(1, cartAfterFirstRemoval.recipes.size)
-        assertEquals(1, cartAfterFirstRemoval.recipes.first().quantity)
+        assertEquals(1, cartAfterFirstRemoval.recipes[101L]?.quantity)
         assertEquals(650, cartAfterFirstRemoval.totalInCents)
+        assertEquals(1, cartAfterFirstRemoval.items[1L]?.quantity)
+        assertEquals(1, cartAfterFirstRemoval.items[2L]?.quantity)
+        assertEquals(1, cartAfterFirstRemoval.items[3L]?.quantity)
 
+        // Act 2: Remove the recipe again
         val cartAfterSecondRemoval = cartService.removeRecipeFromCart(1, 101)
 
-        assertEquals(0, cartAfterSecondRemoval.recipes.size)
-        assertEquals(0, cartAfterSecondRemoval.items.size)
+        // Assert 2: Cart should be empty
+        assertTrue(cartAfterSecondRemoval.recipes.isEmpty())
+        assertTrue(cartAfterSecondRemoval.items.isEmpty())
         assertEquals(0, cartAfterSecondRemoval.totalInCents)
     }
 }
